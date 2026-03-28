@@ -5,8 +5,9 @@ This machine was compromised by exploiting a remote code execution vulnerability
 
 ---
 
-Step 1 - Enumeration
-Nmap Scan:
+Enumeration
+
+Begin with a Nmap Scan:
 nmap -sC -sV <TARGET_IP>
 
 <img width="635" height="365" alt="image" src="https://github.com/user-attachments/assets/a946de05-bfc3-4652-8d07-cb2dd277a501" />
