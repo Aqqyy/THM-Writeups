@@ -127,7 +127,9 @@ cat /root/root.txt
 
 <img width="752" height="153" alt="image" src="https://github.com/user-attachments/assets/ea89e67c-8d7a-41e3-919f-a4189806c803" />
 
-Conclusion
+Conclusion:
+
 Reverse shell provided reliable RCE
+
 Misconfigured Fail2Ban led to full privilege escalation
 
