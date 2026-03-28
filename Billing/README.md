@@ -1,7 +1,7 @@
 # BillingV2-Badr – Remote Code Execution → Fail2Ban Privilege Escalation
 
 ## 🧠 Overview
-This machine was compromised by identifying a Remote Code Execution vulnerability in a web application, gaining a reverse shell, and escalating privileges via a misconfigured Fail2Ban setup.
+This machine was compromised by exploiting a remote code execution vulnerability in the MagnusBilling platform, obtaining a reverse shell, and escalating privileges through a misconfigured Fail2Ban setup.
 
 ---
 
