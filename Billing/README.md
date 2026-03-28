@@ -65,9 +65,7 @@ User Access
 
 Navigated to the home directory:
 
-cd /home
-ls
-cd magnus
+cd /home/magnus
 
 Retrieved the user flag:
 
