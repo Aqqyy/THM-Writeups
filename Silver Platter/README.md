@@ -6,7 +6,6 @@ Nmap scan revealed three open ports:
 
 nmap -sV -sC -p- <target_ip>
 
-Results:
 - 22 — OpenSSH 8.9p1
 - 80 — nginx 1.18.0
 - 8080 — HTTP proxy
