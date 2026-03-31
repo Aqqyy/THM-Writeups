@@ -1,4 +1,4 @@
-# SilverPlatter3---badr Writeup
+# SilverPlatter – CVE-2024-36042 Auth Bypass → CVE-2024-36041 File Read → Log Credential Exposure → Root
 
 
 ## Overview
