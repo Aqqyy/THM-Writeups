@@ -1,4 +1,4 @@
-# SilverPlatter – CVE-2024-36042 Auth Bypass → CVE-2024-36041 File Read → Log Credential Exposure → Root
+# SilverPlatter – CVE-2024-36042 Auth Bypass → CVE-2023-47323 File Read → Log Credential Exposure → Root
 
 
 ## Overview
@@ -87,9 +87,9 @@ work against the administrateur account.
 
 ---
 
-## File Read — CVE-2024-36041
+## File Read — CVE-2023-47323
 
-Still authenticated as scr1ptkiddy, CVE-2024-36041 — an authenticated 
+Still authenticated as scr1ptkiddy, CVE-2023-47323 — an authenticated 
 arbitrary file read vulnerability — was exploited. This revealed 
 credentials stored on the server:
 
