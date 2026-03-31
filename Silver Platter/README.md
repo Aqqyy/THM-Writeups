@@ -46,10 +46,10 @@ cewl http://<target_ip> -d 3 -m 5 -w cewl_wordlist.txt
 Generated targeted wordlist with cupp:
 
 cupp -i
-# Name: Tyler, Surname: Ramsbey
-# Company: HackSmarterSecurity
-# Keywords: 1337est, silverplatter
-# Leet mode: Y
+* Name: Tyler, Surname: Ramsbey
+* Company: HackSmarterSecurity
+* Keywords: 1337est, silverplatter
+* Leet mode: Y
 
 Combined wordlists and ran hydra:
 
