@@ -63,7 +63,7 @@ Hydra returned 0 results. This attack vector was abandoned.
 ## Initial Access — Silverpeas CVE-2024-36042
 
 As the page suggested to talk to the manager on silverpeas I used this as a directory.
-Navigating to http:// <target> :8080/silverpeas revealed a Silverpeas 
+Navigating to http://target-IP:8080/silverpeas revealed a Silverpeas 
 login page.
 
 CVE-2024-36042 — an authentication bypass vulnerability — was exploited 
