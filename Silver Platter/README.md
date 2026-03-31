@@ -1,4 +1,4 @@
-# Silver Platter — TryHackMe Writeup
+# SilverPlatter3---badr Writeup
 
 ## Enumeration
 
