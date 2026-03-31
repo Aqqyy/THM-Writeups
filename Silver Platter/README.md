@@ -1,5 +1,12 @@
 # SilverPlatter3---badr Writeup
 
+
+## Overview
+
+This machine was compromised by exploiting vulnerabilities in the Silverpeas application to gain initial access, followed by credential discovery through log analysis, and privilege escalation via password reuse. The attack demonstrates how application vulnerabilities combined with poor credential handling can lead to full system compromise.
+
+---
+
 ## Enumeration
 
 Nmap scan revealed three open ports:
