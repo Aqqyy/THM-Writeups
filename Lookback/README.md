@@ -1,4 +1,4 @@
-# Lookback v2.2 - 
+# Lookback v2.2 - Default Credentials → Command Injection → ProxyShell RCE (CVE-2021-34473)
 
 ## Overview
 
