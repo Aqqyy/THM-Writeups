@@ -1,4 +1,4 @@
-# Rabbit Store v1.3
+# Rabbit Store v1.3 – JWT Mass Assignment → SSRF/AWS Metadata → Jinja2 SSTI RCE → Erlang RPC Hash Extraction → Root
 
 ## Reconnaissance
 
