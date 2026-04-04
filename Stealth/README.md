@@ -1,4 +1,4 @@
-# Stealth – File Upload Filter Bypass → AV Evasion → Log Deletion → Scheduled Task Binary Hijack → Administrator
+# Stealth3.4n – File Upload Filter Bypass → AV Evasion → Log Deletion → Scheduled Task Binary Hijack → Administrator
 
 ## Overview
 
