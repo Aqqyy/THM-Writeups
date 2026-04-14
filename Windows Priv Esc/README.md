@@ -693,5 +693,3 @@ migrate -N LogonUI.exe
 | UAC bypass | Medium integrity admin session | Admin (High) | `whoami /groups` |
 
 ---
-
-*Part of a structured cybersecurity career roadmap — working toward OSWE and CWEE.*
